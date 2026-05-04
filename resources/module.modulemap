@@ -1,0 +1,54 @@
+framework module Alembic {
+    export *
+    module * { export * }
+
+    explicit module Util {
+        header "Alembic/Util/All.h"
+        export *
+    }
+
+    explicit module AbcCoreAbstract {
+        header "Alembic/AbcCoreAbstract/All.h"
+        export *
+    }
+
+    explicit module AbcCoreFactory {
+        header "Alembic/AbcCoreFactory/All.h"
+        export *
+    }
+
+    explicit module AbcCoreOgawa {
+        header "Alembic/AbcCoreOgawa/All.h"
+        export *
+    }
+
+    explicit module AbcCoreHDF5 {
+        header "Alembic/AbcCoreHDF5/All.h"
+        export *
+    }
+
+    explicit module Ogawa {
+        header "Alembic/Ogawa/All.h"
+        export *
+    }
+
+    explicit module Abc {
+        header "Alembic/Abc/All.h"
+        export *
+    }
+
+    explicit module AbcCollection {
+        header "Alembic/AbcCollection/All.h"
+        export *
+    }
+
+    explicit module AbcGeom {
+        header "Alembic/AbcGeom/All.h"
+        export *
+    }
+
+    explicit module AbcMaterial {
+        header "Alembic/AbcMaterial/All.h"
+        export *
+    }
+}
