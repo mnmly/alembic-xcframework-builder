@@ -1,10 +1,19 @@
 # Personal config for alembic-xcframework-builder.
 # Copy to config.sh and edit. config.sh is gitignored.
 
-# Homebrew prefix for Imath. Alembic links against Imath::Imath.
+# Which slices to build. Drop any you don't need to speed up the build.
+# Supported: macos ios ios-sim visionos visionos-sim tvos tvos-sim
+PLATFORMS="macos ios ios-sim visionos visionos-sim tvos tvos-sim"
+
+# Imath release to vendor for non-macOS slices. The macOS slice uses the
+# Homebrew Imath at IMATH_PREFIX instead.
+IMATH_VERSION="3.1.12"
+
+# Homebrew prefix for Imath. Used only by the macOS slice.
 IMATH_PREFIX="$(brew --prefix imath 2>/dev/null || echo /opt/homebrew/opt/imath)"
 
-# Optional: codesign identity. Leave empty to skip codesign.
+# Optional: codesign identity. Applies to the macOS slice only (static
+# frameworks for iOS/visionOS/tvOS are re-signed by Xcode on Embed & Sign).
 CODESIGN_IDENTITY=""
 # Example:
 # CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
@@ -20,22 +29,18 @@ SWIFT_PACKAGE_FRAMEWORKS_DIR=""
 # Optional: GitHub repo (owner/name) for `make release`. Leave empty to skip.
 GH_RELEASE_REPO=""
 
-# Architectures (currently only arm64 is tested).
-ARCHS="arm64"
+# Per-platform minimum OS versions.
+MACOSX_DEPLOYMENT_TARGET="26.0"
+IOS_DEPLOYMENT_TARGET="17.0"
+VISIONOS_DEPLOYMENT_TARGET="2.0"
+TVOS_DEPLOYMENT_TARGET="17.0"
 
-# macOS deployment target.
-DEPLOYMENT_TARGET="26.0"
-
-# Enable HDF5 backend (requires `brew install hdf5`). OFF by default —
-# Ogawa is the modern Alembic backend and HDF5 is legacy/optional.
-USE_HDF5="OFF"
-
-# Override the git tag if Alembic's tagging convention changes.
+# Override the Alembic git tag if upstream tagging convention changes.
 # Leave empty to auto-detect (<version> then v<version>).
 ALEMBIC_TAG=""
 
-# Extra cmake flags appended to the configure step.
+# Extra cmake flags appended to every Alembic configure step.
 EXTRA_CMAKE_FLAGS=""
 
-# Search paths for dylibbundler (e.g. Imath, optional HDF5).
+# Search paths for dylibbundler (macOS slice only).
 DYLIBBUNDLER_SEARCH_PATHS="/opt/homebrew/lib /opt/homebrew/opt/imath/lib"

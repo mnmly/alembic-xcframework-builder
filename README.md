@@ -1,6 +1,6 @@
 # alembic-xcframework-builder
 
-Builds `Alembic.xcframework` for macOS (arm64) from a tagged upstream Alembic release.
+Builds `Alembic.xcframework` for Apple platforms (macOS, iOS, visionOS, tvOS — device + simulator, arm64) from a tagged upstream Alembic release.
 
 Sibling project to `gdal-xcframework-builder` and `pdal-xcframework-builder`. Same shape: `config.sh`, numbered `build.sh` phases, `Makefile`, `work/` and `output/` dirs.
 
@@ -8,15 +8,15 @@ Sibling project to `gdal-xcframework-builder` and `pdal-xcframework-builder`. Sa
 
 ```sh
 brew install cmake dylibbundler imath
-# optional, only if you set USE_HDF5=ON in config.sh:
-brew install hdf5
 ```
+
+`dylibbundler` and Homebrew `imath` are only used by the macOS slice. iOS/visionOS/tvOS slices build their own static Imath from source.
 
 ## Setup
 
 ```sh
 cp config.sh.example config.sh
-# edit if you need to override IMATH_PREFIX, deployment target, codesign, etc.
+# edit PLATFORMS if you want to skip slices, override deployment targets, etc.
 ```
 
 ## Build
@@ -35,25 +35,33 @@ make ALEMBIC_VERSION=1.8.11 release
 
 ## What it does
 
-Alembic's CMake produces a regular `libAlembic.<version>.dylib` plus headers — no `.framework`. `build.sh` does a normal install, then assembles a proper macOS framework structure (`Versions/A/{Alembic, Headers, Modules, Libraries, Resources}`), bundles Imath via `dylibbundler`, normalises rpaths, and wraps it in an xcframework.
+Alembic's CMake produces a regular dylib or static archive plus headers — no `.framework`. `build.sh` installs Alembic per slice, then assembles a framework around each one and wraps the lot into a single xcframework.
 
-Headers are staged in the canonical upstream layout at `Headers/Alembic/...`. The framework also adds root-level subsystem symlinks such as `Headers/Abc -> Alembic/Abc` so Clang framework lookup can resolve Alembic's own `#include <Alembic/Abc/...>` form without consumers adding a manual `-I Alembic.framework/Headers`. Imath public headers are copied to `Headers/Imath` for consumers that do add the framework headers as an include root.
+- **macOS slice (dynamic):** versioned `Versions/A/{Alembic, Headers, Modules, Libraries, Resources}` layout, Imath pulled in via `dylibbundler`, rpaths normalised.
+- **iOS / visionOS / tvOS slices (static):** flat framework layout. Imath is built statically from source per-slice and merged into a single static archive (`libtool -static`) that becomes the framework binary. No `dylibbundler`, no rpath fixups.
+
+Headers are staged in the canonical upstream layout at `Headers/Alembic/...`. Each slice also adds root-level subsystem symlinks (`Headers/Abc -> Alembic/Abc`, etc.) so Clang framework lookup can resolve Alembic's own `#include <Alembic/Abc/...>` form. Imath public headers are copied to `Headers/Imath` for consumers that add the framework headers as an include root.
+
+HDF5 is not supported. Ogawa is Alembic's modern back-end; HDF5 is read-only legacy and cross-compiling it isn't worth the cost.
 
 The Swift module map is at `resources/module.modulemap` — edit it to change the import surface.
 
 ## Config knobs (config.sh)
 
-- `IMATH_PREFIX` — Homebrew prefix for Imath (auto-detected via `brew --prefix imath`)
-- `USE_HDF5` — `OFF` (default) or `ON`. Adds the legacy HDF5 backend.
-- `CODESIGN_IDENTITY` — optional; usually leave empty (Xcode re-signs on Embed & Sign)
-- `OUTPUT_DIR` — default `./output`
-- `SWIFT_PACKAGE_FRAMEWORKS_DIR` — optional mirror destination
-- `GH_RELEASE_REPO` — for `make release`
-- `ARCHS` — default `arm64`
-- `DEPLOYMENT_TARGET` — default `26.0` (keep aligned with the GDAL/PDAL builders)
-- `ALEMBIC_TAG` — override tag auto-detection
-- `EXTRA_CMAKE_FLAGS`
-- `DYLIBBUNDLER_SEARCH_PATHS`
+- `PLATFORMS` — slices to build. Default: `macos ios ios-sim visionos visionos-sim tvos tvos-sim`. Drop any you don't need.
+- `IMATH_VERSION` — Imath release vendored for non-macOS slices. Default `3.1.12`.
+- `IMATH_PREFIX` — Homebrew prefix for Imath, used only by the macOS slice.
+- `MACOSX_DEPLOYMENT_TARGET` — default `26.0` (keep aligned with the GDAL/PDAL builders).
+- `IOS_DEPLOYMENT_TARGET` — default `17.0`.
+- `VISIONOS_DEPLOYMENT_TARGET` — default `2.0`.
+- `TVOS_DEPLOYMENT_TARGET` — default `17.0`.
+- `CODESIGN_IDENTITY` — optional; applies to macOS slice only (Xcode re-signs on Embed & Sign).
+- `OUTPUT_DIR` — default `./output`.
+- `SWIFT_PACKAGE_FRAMEWORKS_DIR` — optional mirror destination.
+- `GH_RELEASE_REPO` — for `make release`.
+- `ALEMBIC_TAG` — override tag auto-detection.
+- `EXTRA_CMAKE_FLAGS` — appended to every Alembic configure step.
+- `DYLIBBUNDLER_SEARCH_PATHS` — macOS slice only.
 
 ## Make targets
 

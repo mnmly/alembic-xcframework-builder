@@ -22,11 +22,6 @@ framework module Alembic {
         export *
     }
 
-    explicit module AbcCoreHDF5 {
-        header "Alembic/AbcCoreHDF5/All.h"
-        export *
-    }
-
     explicit module Ogawa {
         header "Alembic/Ogawa/All.h"
         export *
