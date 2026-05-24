@@ -5,12 +5,11 @@
 # Supported: macos ios ios-sim visionos visionos-sim tvos tvos-sim
 PLATFORMS="macos ios ios-sim visionos visionos-sim tvos tvos-sim"
 
-# Imath release to vendor for non-macOS slices. The macOS slice uses the
-# Homebrew Imath at IMATH_PREFIX instead.
+# Imath release vendored for every slice. Pinning this ensures every slice
+# in the xcframework uses the same IMATH_INTERNAL_NAMESPACE (Imath_3_1, etc.)
+# so consumer C++ shims built against one slice's headers link cleanly against
+# any other slice's binary.
 IMATH_VERSION="3.1.12"
-
-# Homebrew prefix for Imath. Used only by the macOS slice.
-IMATH_PREFIX="$(brew --prefix imath 2>/dev/null || echo /opt/homebrew/opt/imath)"
 
 # Optional: codesign identity. Applies to the macOS slice only (static
 # frameworks for iOS/visionOS/tvOS are re-signed by Xcode on Embed & Sign).
@@ -41,6 +40,3 @@ ALEMBIC_TAG=""
 
 # Extra cmake flags appended to every Alembic configure step.
 EXTRA_CMAKE_FLAGS=""
-
-# Search paths for dylibbundler (macOS slice only).
-DYLIBBUNDLER_SEARCH_PATHS="/opt/homebrew/lib /opt/homebrew/opt/imath/lib"

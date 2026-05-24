@@ -1,7 +1,11 @@
 #!/bin/bash
 # Build Alembic.xcframework for Apple platforms from a tagged upstream Alembic
-# release. macOS slice is shipped dynamic (with Imath bundled via dylibbundler);
-# iOS / visionOS / tvOS device + simulator slices are static (Imath linked in).
+# release. macOS slice ships as a dynamic dylib with Imath statically linked in;
+# iOS / visionOS / tvOS device + simulator slices ship as static archives with
+# Imath merged in. Every slice links against the SAME vendored Imath version so
+# the IMATH_INTERNAL_NAMESPACE matches across slices — consumers that build a
+# C++ shim against one slice's headers and link against another slice's binary
+# would otherwise hit mangled-symbol mismatches.
 # HDF5 is intentionally not supported — Ogawa is the modern back-end and HDF5
 # adds cross-compile cost we don't need.
 #
@@ -26,35 +30,22 @@ source "${ROOT}/config.sh"
 
 : "${PLATFORMS:=macos ios ios-sim visionos visionos-sim tvos tvos-sim}"
 : "${IMATH_VERSION:=3.1.12}"
-: "${IMATH_PREFIX:?IMATH_PREFIX must be set in config.sh (used by macos slice)}"
 : "${OUTPUT_DIR:=${ROOT}/output}"
 : "${MACOSX_DEPLOYMENT_TARGET:=26.0}"
 : "${IOS_DEPLOYMENT_TARGET:=17.0}"
 : "${VISIONOS_DEPLOYMENT_TARGET:=2.0}"
 : "${TVOS_DEPLOYMENT_TARGET:=17.0}"
 : "${EXTRA_CMAKE_FLAGS:=}"
-: "${DYLIBBUNDLER_SEARCH_PATHS:=/opt/homebrew/lib /opt/homebrew/opt/imath/lib}"
-
-needs_macos=0
-for slice in ${PLATFORMS}; do
-    [ "${slice}" = "macos" ] && needs_macos=1
-done
 
 # Preflight
 missing=()
-core_cmds=(cmake xcodebuild git plutil otool install_name_tool libtool xcrun)
-[ "${needs_macos}" = "1" ] && core_cmds+=(dylibbundler)
-for cmd in "${core_cmds[@]}"; do
+for cmd in cmake xcodebuild git plutil otool install_name_tool libtool xcrun; do
     command -v "$cmd" >/dev/null || missing+=("$cmd (command)")
 done
-if [ "${needs_macos}" = "1" ]; then
-    [ -d "${IMATH_PREFIX}/lib/cmake/Imath" ] || \
-        missing+=("imath cmake config at ${IMATH_PREFIX}/lib/cmake/Imath (brew install imath)")
-fi
 if [ "${#missing[@]}" -gt 0 ]; then
     echo "Missing prerequisites:" >&2
     printf '  - %s\n' "${missing[@]}" >&2
-    [ "${needs_macos}" = "1" ] && echo "Install with:  brew install cmake dylibbundler imath" >&2
+    echo "Install with:  brew install cmake" >&2
     exit 1
 fi
 
@@ -138,7 +129,6 @@ fetch_alembic() {
 }
 
 fetch_imath() {
-    [ "${PLATFORMS}" = "macos" ] && return 0
     if [ ! -d "${IMATH_SRC}/.git" ]; then
         rm -rf "${IMATH_SRC}"
         git clone --depth 1 --branch "v${IMATH_VERSION}" \
@@ -149,7 +139,8 @@ fetch_imath() {
 }
 
 # ----------------------------------------------------------------------------
-# Per-slice Imath build (static, non-macOS only)
+# Per-slice Imath build (always static + PIC, so the macOS slice can link it
+# into libAlembic.dylib and the others into a static archive)
 # ----------------------------------------------------------------------------
 build_imath_static() {
     local slice="$1"
@@ -171,6 +162,7 @@ build_imath_static() {
         -DCMAKE_OSX_DEPLOYMENT_TARGET="${dep}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DBUILD_TESTING=OFF \
         -DIMATH_INSTALL_PKG_CONFIG=OFF \
         -DPYTHON=OFF \
@@ -196,11 +188,10 @@ build_alembic() {
     local shared_flag imath_dir
     if [ "${slice}" = "macos" ]; then
         shared_flag="ON"
-        imath_dir="${IMATH_PREFIX}/lib/cmake/Imath"
     else
         shared_flag="OFF"
-        imath_dir="${WORK}/${slice}/imath-install/lib/cmake/Imath"
     fi
+    imath_dir="${WORK}/${slice}/imath-install/lib/cmake/Imath"
 
     local extra_args=()
     if [ "${slice}" != "macos" ]; then
@@ -314,12 +305,12 @@ EOF
 assemble_macos_framework() {
     local slice="macos"
     local install_dir="${WORK}/${slice}/install"
+    local imath_install="${WORK}/${slice}/imath-install"
     local fw="${STAGE_ROOT}/${slice}/Alembic.framework"
     rm -rf "${fw}"
     mkdir -p \
         "${fw}/Versions/A/Headers" \
         "${fw}/Versions/A/Modules" \
-        "${fw}/Versions/A/Libraries" \
         "${fw}/Versions/A/Resources"
 
     local dylib_real
@@ -346,7 +337,11 @@ assemble_macos_framework() {
         ln -sf Alembic "libAlembic.${soversion}.dylib" && \
         ln -sf Alembic "libAlembic.dylib" )
 
-    stage_headers "${fw}/Versions/A/Headers" "${install_dir}/include" "${IMATH_PREFIX}/include"
+    # Imath is statically linked into libAlembic.dylib (build_imath_static used
+    # CMAKE_POSITION_INDEPENDENT_CODE=ON and Alembic's CMake found Imath::Imath
+    # as a static target). Headers come from the same vendored install so the
+    # IMATH_INTERNAL_NAMESPACE matches the mangled symbols inside the binary.
+    stage_headers "${fw}/Versions/A/Headers" "${install_dir}/include" "${imath_install}/include"
     cp "${ROOT}/resources/module.modulemap" "${fw}/Versions/A/Modules/module.modulemap"
 
     write_macos_info_plist "${fw}/Versions/A/Resources/Info.plist"
@@ -357,43 +352,14 @@ assemble_macos_framework() {
         cp "${license_src}" "${fw}/Versions/A/Resources/LICENSE.txt"
     fi
 
-    # dylibbundler + rpath fixup
-    local search_flags=()
-    for p in ${DYLIBBUNDLER_SEARCH_PATHS}; do
-        [ -d "$p" ] && search_flags+=("-s" "$p")
-    done
-    ( cd "${STAGE_ROOT}/${slice}" && \
-        dylibbundler -od -b -x "./Alembic.framework/Versions/A/Alembic" \
-            -d "./Alembic.framework/Versions/A/Libraries/" \
-            -p "@loader_path/Libraries/" \
-            "${search_flags[@]}" )
-
-    dedupe_rpath() {
-        local target="$1" path="$2" count
-        count=$(otool -l "$target" | grep -c "path ${path} " || true)
-        [[ "$count" =~ ^[0-9]+$ ]] || count=0
-        while [ "$count" -gt 1 ]; do
-            install_name_tool -delete_rpath "$path" "$target" 2>/dev/null || break
-            count=$(otool -l "$target" | grep -c "path ${path} " || true)
-            [[ "$count" =~ ^[0-9]+$ ]] || count=0
-        done
-    }
-    dedupe_rpath "${fw}/Versions/A/Alembic" "@loader_path/Libraries/"
-
-    for lib in "${fw}/Versions/A/Libraries/"*.dylib; do
-        [ -e "$lib" ] || continue
-        dedupe_rpath "$lib" "@loader_path/Libraries/"
-        local count
-        count=$(otool -l "$lib" | grep -c "cmd LC_RPATH" || true)
-        [[ "$count" =~ ^[0-9]+$ ]] || count=0
-        if [ "$count" -eq 0 ]; then
-            install_name_tool -add_rpath @loader_path "$lib" 2>/dev/null || true
-        fi
-        otool -L "$lib" | awk '/@loader_path\/Libraries\//{print $1}' | while read -r dep; do
-            local libname; libname="$(basename "$dep")"
-            install_name_tool -change "$dep" "@loader_path/$libname" "$lib" 2>/dev/null || true
-        done
-    done
+    # Fail fast if Alembic still references an external Imath dylib — that
+    # would mean Imath wasn't actually statically linked and consumers would
+    # hit dyld_missing_symbol errors at runtime.
+    if otool -L "${fw}/Versions/A/Alembic" | grep -qi "libImath"; then
+        echo "macOS slice still references an external libImath dylib:" >&2
+        otool -L "${fw}/Versions/A/Alembic" | grep -i "libImath" >&2
+        exit 1
+    fi
 
     # Top-level symlinks
     ( cd "${fw}/Versions" && ln -sfn A Current )
@@ -401,13 +367,12 @@ assemble_macos_framework() {
         ln -sfn Versions/Current/Alembic Alembic && \
         ln -sfn Versions/Current/Headers Headers && \
         ln -sfn Versions/Current/Modules Modules && \
-        ln -sfn Versions/Current/Libraries Libraries && \
         ln -sfn Versions/Current/Resources Resources )
 
     # Optional codesign
     local sign_id="${CODESIGN_IDENTITY:--}"
     echo "macOS codesign identity: ${sign_id}"
-    find "${fw}/Versions/A" -type f \( -name "*.dylib" -o -name "Alembic" \) \
+    find "${fw}/Versions/A" -type f -name "Alembic" \
         -exec codesign --force --sign "${sign_id}" --timestamp=none {} \;
     codesign --force --sign "${sign_id}" --timestamp=none --deep "${fw}"
 }
@@ -458,9 +423,8 @@ fetch_imath
 # ----------------------------------------------------------------------------
 # Phase 2: build slices
 # ----------------------------------------------------------------------------
-step "2/5  Build per-slice Imath (static, non-macOS)"
+step "2/5  Build per-slice Imath (static + PIC)"
 for slice in ${PLATFORMS}; do
-    [ "${slice}" = "macos" ] && continue
     step "    Imath → ${slice}"
     build_imath_static "${slice}"
 done
@@ -483,6 +447,31 @@ for slice in ${PLATFORMS}; do
         assemble_static_framework "${slice}"
     fi
 done
+
+# ----------------------------------------------------------------------------
+# Imath ABI invariant: every slice must ship the same Imath headers as the
+# Imath that was linked into its binary, otherwise consumers building a C++
+# shim against one slice's headers will get unresolved Imath_3_X symbols when
+# linking against a different slice's binary.
+# ----------------------------------------------------------------------------
+step "Verify Imath ABI consistency across slices"
+imath_abi_lines=""
+for slice in ${PLATFORMS}; do
+    hdr="$(find "${STAGE_ROOT}/${slice}/Alembic.framework" -name ImathConfig.h | head -1)"
+    if [ -z "${hdr}" ]; then
+        echo "Could not find ImathConfig.h in slice ${slice}" >&2
+        exit 1
+    fi
+    v="$(awk -F\" '$1 ~ /^#define IMATH_VERSION_STRING / {print $2}' "${hdr}")"
+    ns="$(awk '$1 == "#define" && $2 == "IMATH_INTERNAL_NAMESPACE" {print $3}' "${hdr}")"
+    printf "    %-13s  IMATH_VERSION_STRING=%-8s  IMATH_INTERNAL_NAMESPACE=%s\n" "${slice}" "${v}" "${ns}"
+    imath_abi_lines="${imath_abi_lines}${v}|${ns}"$'\n'
+done
+distinct=$(printf '%s' "${imath_abi_lines}" | sort -u | grep -c .)
+if [ "${distinct}" -ne 1 ]; then
+    echo "Imath ABI mismatch across slices — see the table above" >&2
+    exit 1
+fi
 
 # ----------------------------------------------------------------------------
 # Phase 4: wrap into xcframework

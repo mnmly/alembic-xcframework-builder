@@ -7,10 +7,10 @@ Sibling project to `gdal-xcframework-builder` and `pdal-xcframework-builder`. Sa
 ## Prereqs
 
 ```sh
-brew install cmake dylibbundler imath
+brew install cmake
 ```
 
-`dylibbundler` and Homebrew `imath` are only used by the macOS slice. iOS/visionOS/tvOS slices build their own static Imath from source.
+Imath is vendored from source per slice (no Homebrew dependency).
 
 ## Setup
 
@@ -37,8 +37,10 @@ make ALEMBIC_VERSION=1.8.11 release
 
 Alembic's CMake produces a regular dylib or static archive plus headers — no `.framework`. `build.sh` installs Alembic per slice, then assembles a framework around each one and wraps the lot into a single xcframework.
 
-- **macOS slice (dynamic):** versioned `Versions/A/{Alembic, Headers, Modules, Libraries, Resources}` layout, Imath pulled in via `dylibbundler`, rpaths normalised.
-- **iOS / visionOS / tvOS slices (static):** flat framework layout. Imath is built statically from source per-slice and merged into a single static archive (`libtool -static`) that becomes the framework binary. No `dylibbundler`, no rpath fixups.
+- **macOS slice (dynamic):** versioned `Versions/A/{Alembic, Headers, Modules, Resources}` layout. Imath is statically linked into `libAlembic.dylib` (no separate Imath dylib).
+- **iOS / visionOS / tvOS slices (static):** flat framework layout. The Alembic and Imath `.a` files are merged with `libtool -static` into a single framework binary.
+
+Every slice links against the same vendored Imath version (pinned by `IMATH_VERSION`). `build.sh` enforces this with a post-build invariant check on `IMATH_VERSION_STRING` and `IMATH_INTERNAL_NAMESPACE` across slices, so a consumer C++ shim built against one slice's headers will link cleanly against any other slice's binary.
 
 Headers are staged in the canonical upstream layout at `Headers/Alembic/...`. Each slice also adds root-level subsystem symlinks (`Headers/Abc -> Alembic/Abc`, etc.) so Clang framework lookup can resolve Alembic's own `#include <Alembic/Abc/...>` form.
 
@@ -57,8 +59,7 @@ The Swift module map is at `resources/module.modulemap` — edit it to change th
 ## Config knobs (config.sh)
 
 - `PLATFORMS` — slices to build. Default: `macos ios ios-sim visionos visionos-sim tvos tvos-sim`. Drop any you don't need.
-- `IMATH_VERSION` — Imath release vendored for non-macOS slices. Default `3.1.12`.
-- `IMATH_PREFIX` — Homebrew prefix for Imath, used only by the macOS slice.
+- `IMATH_VERSION` — Imath release vendored for every slice. Default `3.1.12`.
 - `MACOSX_DEPLOYMENT_TARGET` — default `26.0` (keep aligned with the GDAL/PDAL builders).
 - `IOS_DEPLOYMENT_TARGET` — default `17.0`.
 - `VISIONOS_DEPLOYMENT_TARGET` — default `2.0`.
@@ -69,7 +70,6 @@ The Swift module map is at `resources/module.modulemap` — edit it to change th
 - `GH_RELEASE_REPO` — for `make release`.
 - `ALEMBIC_TAG` — override tag auto-detection.
 - `EXTRA_CMAKE_FLAGS` — appended to every Alembic configure step.
-- `DYLIBBUNDLER_SEARCH_PATHS` — macOS slice only.
 
 ## Make targets
 

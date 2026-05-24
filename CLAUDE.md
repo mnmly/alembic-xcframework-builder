@@ -10,18 +10,20 @@ Alembic's CMake produces a regular dylib (or `.a`) plus headers under `include/A
 
 ## Linking model
 
-- **macOS slice — dynamic.** `ALEMBIC_SHARED_LIBS=ON`, Imath pulled from Homebrew, bundled into the framework via `dylibbundler`. Uses the versioned `Versions/A/...` framework layout. Preserves the original macOS behaviour.
-- **iOS / visionOS / tvOS slices — static.** `ALEMBIC_SHARED_LIBS=OFF`. Imath is vendored from source (pinned by `IMATH_VERSION`) and built statically per slice. The Alembic and Imath `.a` files are merged with `libtool -static` into a single framework binary. Flat (non-versioned) framework layout, no `dylibbundler`, no rpath fixups, no codesign step (Xcode re-signs on Embed & Sign).
+Every slice links against the same vendored Imath (pinned by `IMATH_VERSION`, built static + PIC per slice). This is load-bearing: Alembic's public API exposes `Imath::Vec3<double>` and similar types in C++ symbol mangling, and Imath's `IMATH_INTERNAL_NAMESPACE` (`Imath_3_1`, `Imath_3_2`, …) becomes part of every mangled name. If two slices have different Imath versions, a consumer C++ shim built against one slice's headers won't link against another slice's binary.
 
-The same set of headers + the same `module.modulemap` ship in every slice; only the binary linkage differs.
+- **macOS slice — dynamic.** `ALEMBIC_SHARED_LIBS=ON`, Imath statically linked into `libAlembic.dylib` (no separate Imath dylib, no `dylibbundler`). Uses the versioned `Versions/A/...` framework layout. A build-time check asserts `libAlembic.dylib` has no external `libImath` dependency.
+- **iOS / visionOS / tvOS slices — static.** `ALEMBIC_SHARED_LIBS=OFF`. The Alembic and Imath `.a` files are merged with `libtool -static` into a single framework binary. Flat (non-versioned) framework layout, no codesign step (Xcode re-signs on Embed & Sign).
+
+The same headers + module map ship in every slice; only the binary linkage differs. A post-build invariant grep-compares `IMATH_VERSION_STRING` and `IMATH_INTERNAL_NAMESPACE` from every slice's `Headers/Imath/ImathConfig.h` and fails the build if they diverge.
 
 ## Pipeline (build.sh, 5 phases)
 
-1. **Fetch sources** — clone Alembic at tag (auto-detects `<version>` or `v<version>` via `git ls-remote`; override with `ALEMBIC_TAG`). Clone Imath at `v${IMATH_VERSION}` (skipped if `PLATFORMS=macos` only).
-2. **Build per-slice Imath (static, non-macOS)** — one CMake configure/build/install per non-macOS slice into `work/.../<slice>/imath-install` with `BUILD_SHARED_LIBS=OFF`. `CMAKE_SYSTEM_NAME` + `CMAKE_OSX_SYSROOT` (from `xcrun --sdk <sdk> --show-sdk-path`) drive cross-compilation.
-3. **Build per-slice Alembic** — same cross-compile pattern. macOS slice uses Homebrew Imath via `IMATH_PREFIX`; other slices point `Imath_DIR` at their per-slice Imath install. `USE_HDF5=OFF` always.
-4. **Assemble frameworks** — `assemble_macos_framework` (versioned + dylibbundler) for macOS, `assemble_static_framework <slice>` (flat + libtool merge) for all others. Shared `stage_headers` function handles Alembic nested layout, subsystem symlinks at the framework header root, and Imath headers.
-5. **Wrap in xcframework + zip** — single `xcodebuild -create-xcframework` with one `-framework` arg per slice; `ditto` zip; `swift package compute-checksum`. Optional `gh release create` if `RELEASE=1` and `GH_RELEASE_REPO` set.
+1. **Fetch sources** — clone Alembic at tag (auto-detects `<version>` or `v<version>` via `git ls-remote`; override with `ALEMBIC_TAG`). Clone Imath at `v${IMATH_VERSION}`.
+2. **Build per-slice Imath (static + PIC)** — one CMake configure/build/install per slice (including macOS) into `work/.../<slice>/imath-install` with `BUILD_SHARED_LIBS=OFF` and `CMAKE_POSITION_INDEPENDENT_CODE=ON`. PIC is required so the macOS slice can link static Imath into a dynamic Alembic dylib. `CMAKE_SYSTEM_NAME` + `CMAKE_OSX_SYSROOT` (from `xcrun --sdk <sdk> --show-sdk-path`) drive cross-compilation.
+3. **Build per-slice Alembic** — same cross-compile pattern. Every slice points `Imath_DIR` at its per-slice Imath install (no Homebrew). `USE_HDF5=OFF` always.
+4. **Assemble frameworks** — `assemble_macos_framework` (versioned, dynamic, no dylibbundler) for macOS, `assemble_static_framework <slice>` (flat + libtool merge) for all others. Shared `stage_headers` function handles Alembic nested layout, subsystem symlinks at the framework header root, and Imath headers — Imath headers come from the vendored install on every slice.
+5. **Verify Imath ABI consistency + wrap in xcframework + zip** — invariant check that every slice's `Headers/Imath/ImathConfig.h` declares the same `IMATH_VERSION_STRING` and `IMATH_INTERNAL_NAMESPACE`; then `xcodebuild -create-xcframework`; `ditto` zip; `swift package compute-checksum`. Optional `gh release create` if `RELEASE=1` and `GH_RELEASE_REPO` set.
 
 ## Files
 
@@ -34,8 +36,7 @@ The same set of headers + the same `module.modulemap` ship in every slice; only 
 ## Config knobs (config.sh)
 
 - `PLATFORMS` — slices to build. Default `macos ios ios-sim visionos visionos-sim tvos tvos-sim`. Drop any to skip.
-- `IMATH_VERSION` — Imath release vendored for non-macOS slices. Default `3.1.12`.
-- `IMATH_PREFIX` — macOS slice only (Homebrew Imath).
+- `IMATH_VERSION` — Imath release vendored for every slice. Default `3.1.12`.
 - `MACOSX_DEPLOYMENT_TARGET` — default `26.0`.
 - `IOS_DEPLOYMENT_TARGET` — default `17.0`.
 - `VISIONOS_DEPLOYMENT_TARGET` — default `2.0`.
@@ -46,14 +47,15 @@ The same set of headers + the same `module.modulemap` ship in every slice; only 
 - `GH_RELEASE_REPO` — for `make release`.
 - `ALEMBIC_TAG` — override tag auto-detection.
 - `EXTRA_CMAKE_FLAGS` — appended to every Alembic configure step.
-- `DYLIBBUNDLER_SEARCH_PATHS` — macOS slice only.
+
+`IMATH_PREFIX` and `DYLIBBUNDLER_SEARCH_PATHS` were removed: Imath is vendored from source for every slice (including macOS) and `dylibbundler` is no longer used.
 
 ## Conventions and gotchas
 
 - **Alembic upstream tags use bare `<version>` (e.g. `1.8.11`)** — no `v` prefix in modern history. Imath uses `v<version>` (e.g. `v3.1.12`).
 - **`Headers/Alembic/` nested layout is deliberate** — Alembic's public headers expect `#include <Alembic/Abc/...>`. Don't flatten. The root-level subsystem entries (`Headers/Abc`, `Headers/Util`, etc.) are symlinks for framework lookup compatibility, not the canonical install layout.
-- **Imath headers are part of the compile surface** — every slice ships `Headers/Imath` because Alembic's public headers `#include <Imath/...>`.
-- **macOS slice has a `Libraries/` dir with bundled Imath dylib; other slices do not** — Imath is statically linked into the framework binary on iOS/visionOS/tvOS.
+- **Imath headers are part of the compile surface** — every slice ships `Headers/Imath` because Alembic's public headers `#include <Imath/...>`. The headers must match the Imath that was linked into that slice's binary — see the Imath ABI invariant above.
+- **No `Libraries/` dir on any slice** — Imath is statically linked into the framework binary on every platform.
 - **Static framework binary is a Mach-O `ar` archive** named `Alembic` (no extension) — `xcodebuild -create-xcframework` accepts this.
 - **Module map ships submodules per Alembic subsystem** (`Util`, `AbcCoreAbstract`, `AbcCoreFactory`, `AbcCoreOgawa`, `Ogawa`, `Abc`, `AbcCollection`, `AbcGeom`, `AbcMaterial`) using each subsystem's `All.h`. `AbcCoreHDF5` was removed when HDF5 was dropped.
 - **HDF5 is intentionally unsupported** — Ogawa is the modern back-end; HDF5 is read-only legacy with cross-compile costs we don't want.
