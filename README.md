@@ -40,7 +40,15 @@ Alembic's CMake produces a regular dylib or static archive plus headers — no `
 - **macOS slice (dynamic):** versioned `Versions/A/{Alembic, Headers, Modules, Libraries, Resources}` layout, Imath pulled in via `dylibbundler`, rpaths normalised.
 - **iOS / visionOS / tvOS slices (static):** flat framework layout. Imath is built statically from source per-slice and merged into a single static archive (`libtool -static`) that becomes the framework binary. No `dylibbundler`, no rpath fixups.
 
-Headers are staged in the canonical upstream layout at `Headers/Alembic/...`. Each slice also adds root-level subsystem symlinks (`Headers/Abc -> Alembic/Abc`, etc.) so Clang framework lookup can resolve Alembic's own `#include <Alembic/Abc/...>` form. Imath public headers are copied to `Headers/Imath` for consumers that add the framework headers as an include root.
+Headers are staged in the canonical upstream layout at `Headers/Alembic/...`. Each slice also adds root-level subsystem symlinks (`Headers/Abc -> Alembic/Abc`, etc.) so Clang framework lookup can resolve Alembic's own `#include <Alembic/Abc/...>` form.
+
+## Consumer setup
+
+Alembic's public headers do `#include <Imath/half.h>`. Clang's `-F` framework search resolves `<X/Y>` as `X.framework/Headers/Y`, which works for `<Alembic/...>` but NOT for `<Imath/...>` because we don't ship a separate Imath framework. Add `Alembic.framework/Headers` to your `HEADER_SEARCH_PATHS` (or pass `-I .../Alembic.framework/Headers`) so the bundled `Headers/Imath/` directory is visible to the include resolver. Example for Xcode build settings:
+
+```
+HEADER_SEARCH_PATHS = $(inherited) "$(BUILT_PRODUCTS_DIR)/Alembic.framework/Headers"
+```
 
 HDF5 is not supported. Ogawa is Alembic's modern back-end; HDF5 is read-only legacy and cross-compiling it isn't worth the cost.
 
