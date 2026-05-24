@@ -35,7 +35,9 @@ make ALEMBIC_VERSION=1.8.11 release
 
 ## What it does
 
-Alembic's CMake produces a regular `libAlembic.<version>.dylib` plus headers — no `.framework`. `build.sh` does a normal install, then assembles a proper macOS framework structure (`Versions/A/{Alembic, Headers/Alembic, Modules, Libraries, Resources}`), bundles Imath via `dylibbundler`, normalises rpaths, and wraps it in an xcframework.
+Alembic's CMake produces a regular `libAlembic.<version>.dylib` plus headers — no `.framework`. `build.sh` does a normal install, then assembles a proper macOS framework structure (`Versions/A/{Alembic, Headers, Modules, Libraries, Resources}`), bundles Imath via `dylibbundler`, normalises rpaths, and wraps it in an xcframework.
+
+Headers are staged in the canonical upstream layout at `Headers/Alembic/...`. The framework also adds root-level subsystem symlinks such as `Headers/Abc -> Alembic/Abc` so Clang framework lookup can resolve Alembic's own `#include <Alembic/Abc/...>` form without consumers adding a manual `-I Alembic.framework/Headers`. Imath public headers are copied to `Headers/Imath` for consumers that do add the framework headers as an include root.
 
 The Swift module map is at `resources/module.modulemap` — edit it to change the import surface.
 

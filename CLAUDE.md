@@ -17,6 +17,8 @@ Alembic's CMake (`ALEMBIC_SHARED_LIBS=ON`) produces a regular `libAlembic.<versi
    - `Versions/A/Alembic` ← `lib/libAlembic.X.Y.Z.dylib`, with `install_name_tool -id "@rpath/Alembic.framework/Versions/A/Alembic"`
    - SOVERSION-derived symlinks `libAlembic.<X>.dylib`, `libAlembic.dylib` → `Alembic`
    - `Versions/A/Headers/Alembic/` ← `install/include/Alembic/` (preserves nested layout)
+   - `Versions/A/Headers/<Alembic subsystem>` symlinks → `Alembic/<subsystem>` for Clang framework include lookup
+   - `Versions/A/Headers/Imath/` ← `${IMATH_PREFIX}/include/Imath/` because Alembic public headers include Imath headers
    - `Versions/A/Modules/module.modulemap` ← shipped at `resources/module.modulemap`
    - `Versions/A/Resources/Info.plist` written via heredoc (same approach as PDAL builder, avoids smart-quote issues)
 5. **Bundle deps + rpath fixup** — `dylibbundler` pulls in Imath (and any optional HDF5/zlib if enabled), then dedupe LC_RPATHs and rewrite `@loader_path/Libraries/<name>` → `@loader_path/<name>` inside bundled dylibs.
@@ -49,7 +51,8 @@ Alembic's CMake (`ALEMBIC_SHARED_LIBS=ON`) produces a regular `libAlembic.<versi
 ## Conventions and gotchas
 
 - **Alembic upstream tags use bare `<version>` (e.g. `1.8.11`)** — no `v` prefix in modern history. The auto-detect tries the bare form first then falls back to `v<version>`.
-- **`Headers/Alembic/` nested layout is deliberate** — Alembic's public headers expect `#include <Alembic/Abc/...>`. Don't flatten.
+- **`Headers/Alembic/` nested layout is deliberate** — Alembic's public headers expect `#include <Alembic/Abc/...>`. Don't flatten. The root-level subsystem entries (`Headers/Abc`, `Headers/Util`, etc.) are symlinks for framework lookup compatibility, not the canonical install layout.
+- **Imath headers are part of the compile surface** — the framework bundles the Imath dylib and also ships `Headers/Imath` for consumers that add the framework headers as an include root.
 - **Imath is the only required runtime dep** in the default config. If `USE_HDF5=ON`, ensure `brew install hdf5` and confirm it lands in the bundle.
 - **Module map ships submodules per Alembic subsystem** (`Util`, `AbcCoreAbstract`, `AbcCoreFactory`, `AbcCoreOgawa`, `AbcCoreHDF5`, `Ogawa`, `Abc`, `AbcCollection`, `AbcGeom`, `AbcMaterial`) using each subsystem's `All.h`. There is no project-wide umbrella header in upstream Alembic.
 - **`CMAKE_OSX_DEPLOYMENT_TARGET=26.0`** is high. Keep aligned with the GDAL/PDAL builders.

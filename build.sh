@@ -149,6 +149,30 @@ SOVERSION="$(echo "${DYLIB_BASENAME}" | sed -E 's/^libAlembic\.([0-9]+).*\.dylib
 # Headers (Headers/Alembic/...). Alembic installs to include/Alembic/<Module>/*.h
 cp -R "${INSTALL_DIR}/include/Alembic" "${FW}/Versions/A/Headers/Alembic"
 
+# Framework include compatibility. Clang resolves
+#   #include <Alembic/Abc/All.h>
+# via -F as:
+#   Alembic.framework/Headers/Abc/All.h
+# so expose each Alembic subsystem at the framework header root while keeping
+# the canonical install layout under Headers/Alembic/.
+while IFS= read -r subsystem; do
+    name="$(basename "${subsystem}")"
+    ( cd "${FW}/Versions/A/Headers" && ln -sfn "Alembic/${name}" "${name}" )
+done < <(find "${FW}/Versions/A/Headers/Alembic" -mindepth 1 -maxdepth 1 -type d | sort)
+
+# Alembic's public headers include Imath headers, and the framework bundles the
+# Imath dylib below. Ship the matching public headers for consumers that add the
+# framework's Headers directory as an include root.
+if [ -d "${IMATH_PREFIX}/include/Imath" ]; then
+    cp -R "${IMATH_PREFIX}/include/Imath" "${FW}/Versions/A/Headers/Imath"
+else
+    echo "Could not locate Imath headers at ${IMATH_PREFIX}/include/Imath" >&2
+    exit 1
+fi
+
+test -f "${FW}/Versions/A/Headers/Abc/All.h"
+test -f "${FW}/Versions/A/Headers/Imath/half.h"
+
 # Modulemap
 cp "${ROOT}/resources/module.modulemap" "${FW}/Versions/A/Modules/module.modulemap"
 
